@@ -1,0 +1,7 @@
+# Core dependency: PGN parsing + UCI engine communication.
+python-chess>=1.999
+
+# Optional, used only if installed (nicer tables / plotting later).
+# Kept commented so the base install stays minimal.
+# numpy>=1.26
+# matplotlib>=3.8
