@@ -1,33 +1,38 @@
 # AI cheat-detection system for chess
 
-A toolkit for spotting engine-assisted cheating in online chess games. It grades
-each move of a game against a chess engine and then aggregates those grades
-across many games into a **statistical suspicion profile** for a player.
+This is my project to detect engine-assisted cheating in online chess. The idea
+is to grade each move of a game against a chess engine, then look at how those
+grades stack up across many of a player's games to decide whether something
+looks off.
 
-> **What this is not:** it does not "prove" anyone cheats. It produces the same
-> kind of statistical evidence that Chess.com and Lichess feed to *human*
-> reviewers. Any decision about a real account should always involve a person
-> looking at the underlying games. See [Ethics & limits](#ethics--limits).
+It does not "prove" anyone cheats — it produces statistical evidence, the same
+kind of thing Chess.com and Lichess generate and then hand to a human reviewer.
+I'm treating the output as decision-support, never as a verdict.
 
----
+## Where I started and why
 
-## Why this design
+I had three angles when I began (notes to self so I remember the reasoning):
 
-You floated three starting points. Here's where each landed and why:
+**Analysing the moves themselves** — this is the core of what I built. It's the
+most reliable signal. The obvious objection is that a smart cheater throttles
+their engine to look human, but that throttling leaves its own fingerprints once
+you stop looking at a single game and look at a whole history.
 
-| Idea | Verdict | Reason |
-|------|---------|--------|
-| **1. Analyse the moves themselves** | ✅ Built (core) | The single most reliable signal. Yes, strong cheaters throttle their engine to look human — but that throttling *itself* leaves statistical fingerprints once you look across many games. |
-| **2. Look at the track record across games** | ✅ Built (profiling layer) | A single brilliant game proves nothing; humans have good days. Patterns *across* games (consistently tiny error, robotic low variance, sudden rating jumps) are what actually distinguish a cheater. This is the heart of real anti-cheat. |
-| **3. Inspect the suspect's computer for a running bot** | ❌ Deliberately not built | Scanning someone else's machine for processes is invasive, needs consent and a client install, and is legally/ethically fraught. It's documented below as the "client-side anti-cheat" path so you can decide later — but it's a fundamentally different (and riskier) product than server-side analysis. |
+**Looking at the track record across games** — also built. One brilliant game
+means nothing; everyone has good days. What separates a cheater is the pattern
+over many games: consistently tiny error, suspiciously low variance, a rating
+that suddenly jumps. This is really the heart of the thing.
 
-The reason idea #1 isn't hopeless against adaptive cheaters: a player who only
-consults an engine in *critical* positions shows a telltale split — near-perfect
-play in sharp middlegames but ordinary endgames, or a move-time pattern that
-doesn't match the difficulty of the position. The metrics here are bucketed by
-game phase precisely so those splits surface.
+**Inspecting the suspect's computer for a running bot** — I decided not to build
+this. Scanning someone else's machine needs consent and a client install, and
+doing it to a stranger is illegal in most places. I've left notes at the bottom
+on what it would actually take if I ever revisit it, but it's a completely
+different (and riskier) project from server-side analysis.
 
----
+One thing worth remembering about the move-analysis angle: a player who only
+uses an engine in critical positions tends to show a split — near-perfect sharp
+middlegames but ordinary endgames, or move times that don't match how hard the
+position is. That's why I bucket the metrics by game phase.
 
 ## How it works
 
@@ -41,52 +46,46 @@ PGN file ──► analyze.py ──► per-move grades ──► metrics.py ─
                                                           suspicion score + reasons
 ```
 
-1. **`engine.py`** owns one long-lived UCI engine process (Stockfish by
-   default) and answers "what's the best move here and how good is the
-   position?" for any board.
-2. **`analyze.py`** walks every move of a game. For each move it records: the
-   engine's preferred move, whether the player matched it, and how many
-   centipawns the move threw away.
-3. **`metrics.py`** is pure math (no engine, no I/O — fully unit-tested). It
-   converts raw centipawns into **win %** and per-move **accuracy**, and
-   aggregates a side's moves into a game summary.
-4. **`profile.py`** combines many games for one player into a 0–100 **suspicion
-   score** with human-readable reasons.
+- **`engine.py`** runs one long-lived Stockfish (UCI) process and answers
+  "best move here, and how good is the position?" for any board.
+- **`analyze.py`** walks every move of a game and records the engine's best
+  move, whether the player matched it, and how many centipawns the move lost.
+- **`metrics.py`** is pure math (no engine, no I/O, so it's easy to test). It
+  turns centipawns into win % and per-move accuracy and aggregates a side's
+  moves into a game summary.
+- **`profile.py`** combines a player's games into a 0–100 suspicion score with
+  reasons in plain English.
 
-### The metrics
+### The metrics I'm using
 
 - **ACPL (average centipawn loss)** — mean centipawns lost per move vs the
-  engine's best. Lower = stronger/cleaner. Per-move loss is capped at 1000cp so
-  one walk-into-mate doesn't swamp the average.
-- **Engine top-move match %** — how often the player chose the engine's #1 move.
-  Very high sustained match rates are the classic cheating tell.
-- **Accuracy** — a 0–100 score per move derived from how much *win %* (not raw
-  centipawns) the move gave up, so errors are weighted by how much they actually
-  change the practical result.
+  engine's best. Lower is cleaner. I cap per-move loss at 1000cp so one move
+  into a forced mate doesn't blow up the average.
+- **Engine top-move match %** — how often the player picked the engine's first
+  choice. A sustained high match rate is the classic tell.
+- **Accuracy** — a 0–100 per-move score based on how much *win %* the move gave
+  up (not raw centipawns), so mistakes are weighted by how much they actually
+  change the result.
 - **Per-phase breakdown** — all of the above split into opening / middlegame /
-  endgame, to expose selective engine use.
-- **Cross-game variance** — humans are streaky; bots are metronomic. Unusually
-  low game-to-game variance is itself a flag.
-
----
+  endgame to catch selective engine use.
+- **Cross-game variance** — humans are streaky, bots are metronomic, so low
+  game-to-game variance is itself a flag.
 
 ## Install
 
-Requires Python 3.10+ and a UCI engine (Stockfish recommended).
+Needs Python 3.10+ and a UCI engine (I'm using Stockfish).
 
 ```bash
-# 1. Engine (macOS; use your package manager elsewhere, or download a binary)
+# Engine (macOS; swap for your package manager elsewhere)
 brew install stockfish
 
-# 2. Python deps in a virtualenv (Python is "externally managed" on most setups)
+# Python deps in a venv (system Python is "externally managed" on most setups)
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-The pure-math layer (`metrics.py`) and its tests run with **no** dependencies at
-all — handy for development before you install anything.
-
----
+The math layer and its tests run with no dependencies, which is handy before
+installing anything.
 
 ## Usage
 
@@ -98,8 +97,8 @@ all — handy for development before you install anything.
 .venv/bin/python -m chesscheat.cli profile data/sample.pgn --player Morphy --depth 16
 ```
 
-Common flags: `--engine /path/to/binary` (if not on PATH), `--depth N` (search
-depth; higher = slower but more accurate), `--threads N`.
+Flags: `--engine /path/to/binary` if it's not on PATH, `--depth N` (deeper =
+slower but more accurate), `--threads N`.
 
 ### Example output
 
@@ -118,98 +117,129 @@ depth; higher = slower but more accurate), `--threads N`.
     - Very high engine top-move match (88.2%).
 ```
 
-(Yes — Morphy's *Opera Game* scores as "suspicious". That's the right lesson:
-on a single brilliant game these metrics light up for anyone, which is exactly
-why the tool demands multiple games and a human reviewer.)
+Morphy's Opera Game scoring as "suspicious" is the point: on a single brilliant
+game these metrics light up for anyone, which is exactly why I require multiple
+games and a human in the loop.
 
----
-
-## Project layout
+## Layout
 
 ```
 chesscheat/
-  engine.py     UCI engine wrapper (Stockfish). Swappable / mockable.
-  analyze.py    Single-game, move-by-move analysis -> GameReport
-  metrics.py    Pure math: win%, accuracy, per-game aggregation (no deps)
+  engine.py     UCI engine wrapper (Stockfish)
+  analyze.py    Single-game move-by-move analysis -> GameReport
+  metrics.py    Pure math: win%, accuracy, aggregation (no deps)
   profile.py    Cross-game suspicion scoring + reasons
-  cli.py        Command-line entry point (analyze / profile)
+  cli.py        CLI entry point (analyze / profile)
 data/
-  sample.pgn    A legal sample game (Morphy, Opera Game)
+  sample.pgn    Legal sample game (Morphy, Opera Game)
 tests/
-  test_metrics.py   Dependency-free unit tests for the math layer
-requirements.txt
+  test_metrics.py   Dependency-free tests for the math layer
 ```
 
-Run the tests:
+Run tests:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
----
+## Calibration (don't trust the numbers yet)
 
-## Calibration (read before trusting the numbers)
+The thresholds in `profile.py` are conservative guesses, not calibrated values.
+ACPL and match % depend a lot on:
 
-The thresholds in `profile.py` (`THRESHOLDS`) are **conservative starting
-points, not science.** ACPL and match % depend heavily on:
+- **Engine depth** — deeper search changes the "best move", which changes match %.
+- **Rating** — a 2600 GM legitimately has low ACPL; the same number from a 1200
+  is far more suspicious, so thresholds should be rating-relative.
+- **Time control** — bullet is much noisier than classical.
 
-- **Engine depth** — deeper search changes "best move", which changes match %.
-- **Rating level** — a 2600 GM legitimately has low ACPL; a 1200 player with
-  the same ACPL is far more suspicious. Thresholds should be rating-relative.
-- **Time control** — bullet games are noisier than classical.
+To do this properly I need a labelled dataset (known-clean vs confirmed-banned
+games, bucketed by rating and time control) and then to tune the thresholds, or
+replace the hand-weighted score with a trained classifier. The priority is
+keeping false positives low — a wrong accusation is worse than a missed cheater.
 
-To calibrate properly you need a **labelled dataset**: games from known-clean
-players and from confirmed-banned accounts, ideally bucketed by rating and time
-control. Then tune the thresholds (or replace the hand-weighted score with a
-trained classifier) so false-positive rate stays low. **Minimising false
-positives matters more than catching everyone** — a wrong cheating accusation is
-very costly.
+## What's next
 
----
+1. Rating-relative thresholds.
+2. Move-time analysis from PGN clock tags (`%clk`) — humans think longer on hard
+   moves; engine users often blitz the hard ones and stall on easy ones. Strong
+   independent signal, needs no engine.
+3. Pull games straight from the Lichess and Chess.com public APIs instead of
+   needing a PGN file.
+4. Labelled-data calibration, then an ML classifier.
+5. A per-player HTML report with charts for a human reviewer.
+6. Skip opening-book moves so theory isn't graded as brilliance.
 
-## Roadmap / where to take this next
+### If I ever revisit the "scan the computer" idea
 
-Ordered roughly by value-for-effort:
+It only works as a consenting client install (like tournament or game anti-cheat
+software), watching for a second engine process, suspicious window switching,
+clipboard activity, VMs, etc. It's an arms race with real privacy and
+false-positive risk and a separate codebase from this. Server-side statistics
+(the approach here) is what the big sites actually rely on, so client-side stays
+a last resort.
 
-1. **Rating-relative thresholds** — accept each player's rating and compare
-   their metrics against the expected distribution for that rating.
-2. **Move-time analysis** — pull clock times from PGN (`%clk` tags). Humans
-   spend longer on hard moves; engine users often play hard moves *instantly*
-   and easy moves slowly (waiting to look human). This is a strong independent
-   signal and needs no engine.
-3. **Online fetchers** — pull a player's recent games directly from the
-   Lichess (`/api`) or Chess.com public APIs instead of needing a PGN file.
-4. **Labelled-data calibration + ML** — replace the hand-weighted suspicion
-   score with a classifier trained on clean-vs-banned games (see Calibration).
-5. **"Roll-up" report** — HTML/PDF per-player report with charts (win% graph,
-   per-phase bars) for a human reviewer.
-6. **Opening-book filtering** — don't penalise/credit book opening moves; only
-   grade moves once the players are out of theory.
+## Things to read
 
-### The deferred idea #3: client-side anti-cheat
+Background I'm using / want to go deeper on, grouped by angle.
 
-If you ever want to pursue "look inside the person's computer", understand what
-it actually requires and costs:
+### Chess + cheat detection specifically
 
-- It only works as a **consenting client install** (like tournament anti-cheat
-  software or game anti-cheat), not as something you run against a stranger's
-  machine — doing the latter without authorisation is illegal in most places.
-- It would watch for a second chess engine process, suspicious window focus
-  switches, clipboard activity, virtual machines, etc.
-- It's an arms race with high false-positive and privacy risk, and it's a
-  completely separate codebase from this server-side analyser.
+- **Kenneth Regan's chess research page** — the academic authority on
+  statistical cheating detection in chess. Start here.
+  https://cse.buffalo.edu/~regan/chess/fidelity/
+- **Regan & Haworth, "Intrinsic Chess Ratings" (AAAI 2011)** — models a
+  player's move choices against engine evaluations; the basis of his
+  cheating-detection z-score method.
+  https://cse.buffalo.edu/~regan/papers/pdf/ReHa11.pdf
+- **Regan, Macieja & Haworth, "Understanding Distributions of Chess
+  Performances"** — how move-quality distributions vary with skill.
+  https://cse.buffalo.edu/~regan/papers/pdf/RMH11b.pdf
+- **irwin** — Lichess's open-source cheat-detection model. Reading the code is a
+  great practical complement to the papers. https://github.com/clarkerubber/irwin
+- **Lichess accuracy / win% writeup** — where the win-percent and accuracy
+  formulas I used come from. https://lichess.org/page/accuracy
 
-Recommendation: keep building the server-side statistical approach (idea #1+#2),
-which is what every major chess site relies on, and treat client-side as a
-last-resort, consent-gated add-on.
+### Modelling human (not engine-best) play
 
----
+- **McIlroy-Young et al., "Aligning Superhuman AI with Human Behavior: Chess as
+  a Model System" (KDD 2020)** — the Maia engine, which predicts the move a
+  human of a given rating would actually play. Useful because "did they match a
+  human model?" is a different question from "did they match Stockfish?".
+  https://arxiv.org/abs/2006.01855 · project: https://maiachess.com
+- **McIlroy-Young et al., "Detecting Individual Decision-Making Style:
+  Behavioral Stylometry in Chess" (NeurIPS 2021)** — identifying a player from
+  their move patterns; relevant to spotting "this isn't how this account
+  normally plays." https://arxiv.org/abs/2208.01366
+- **CSSLab (Toronto) chess research + data** — the group behind Maia, with
+  datasets and follow-up work. https://csslab.cs.toronto.edu/
 
-## Ethics & limits
+### Datasets to practise on
 
-- This is a **decision-support** tool, not a judge. Output is probabilistic.
-- Always have a human review flagged games before acting on an account.
-- Strong legitimate players *will* trip the metrics on their best games — that's
-  why multiple games and rating context are required.
-- Optimise for **few false positives.** A false ban is worse than a missed
-  cheater.
+- **Lichess open database** — billions of games in PGN, many with `%eval` and
+  `%clk` already in them. The single best place to get real data, including for
+  building a labelled set later. https://database.lichess.org/
+- **Maia / CSSLab data** — preprocessed human-game data tied to the papers
+  above. https://github.com/CSSLab/maia-chess
+- **FICS games database** — older but large, useful for variety.
+  https://www.ficsgames.org/
+
+### Statistics & math background
+
+- **Win-probability / logistic models** — the cp→win% mapping is just a logistic
+  curve; understanding logistic regression makes the accuracy metric click.
+- **Z-scores & hypothesis testing** — Regan's method is essentially "how many
+  standard deviations is this player's performance from what their rating
+  predicts?" Worth being solid on z-scores, p-values, and multiple-comparison
+  pitfalls (test enough players and someone looks guilty by chance).
+- **Precision/recall & ROC/AUC** — for evaluating the detector once I have
+  labelled data; the false-positive cost asymmetry matters here.
+- **Tools:** the **UCI protocol** (how engines talk) and the **python-chess**
+  docs (https://python-chess.readthedocs.io/) — both are what `engine.py` is
+  built on.
+
+## A note on ethics
+
+This is decision-support, not a judge. The output is probabilistic, strong
+legitimate players will trip the metrics on their best games, and anything real
+should have a human review the actual games first. I'm optimising for few false
+positives — a false ban is worse than a missed cheater.
