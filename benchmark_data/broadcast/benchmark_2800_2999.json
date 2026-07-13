@@ -1,0 +1,25 @@
+{
+  "elo_range": [
+    2800,
+    2999
+  ],
+  "games_analyzed": 200,
+  "player_side_samples": 246,
+  "avg_acpl": 17.882946753448902,
+  "variance_acpl": 423.17770785094893,
+  "std_acpl": 20.57128357324717,
+  "high_median_acpl": 14.022222222222222,
+  "low_median_acpl": 13.867924528301886,
+  "avg_accuracy": 95.58523829113264,
+  "variance_accuracy": 7.4531782916847265,
+  "std_accuracy": 2.730050968697238,
+  "high_median_accuracy": 95.67033395728049,
+  "low_median_accuracy": 95.6585817829809,
+  "avg_match_pct": 57.350471542389904,
+  "variance_match_pct": 105.87679132424934,
+  "std_match_pct": 10.289644858995345,
+  "high_median_match_pct": 57.5,
+  "low_median_match_pct": 57.142857142857146,
+  "total_blunders": 200,
+  "inference_seconds": 1168.9846785419995
+}

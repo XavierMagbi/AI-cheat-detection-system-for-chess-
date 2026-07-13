@@ -8,6 +8,3 @@ __pycache__/
 # Local datasets are too large for Git/GitHub.
 data/*
 !data/
-
-# Generated benchmark outputs.
-benchmark_data/
