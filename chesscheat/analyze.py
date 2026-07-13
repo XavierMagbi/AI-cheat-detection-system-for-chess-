@@ -49,13 +49,16 @@ class GameReport:
     """Everything we learned about one game."""
 
     white: str
+    elo_white : int
     black: str
+    elo_black : int
     result: str
+    type_game: str = "Standard"
     moves: list[MoveEval] = field(default_factory=list)
     white_summary: dict = field(default_factory=dict)
     black_summary: dict = field(default_factory=dict)
 
-    def for_player(self, name: str) -> dict | None:
+    def for_player(self, name: str , elo: int) -> dict | None:
         """Return the summary for ``name`` (case-insensitive), or None."""
         if name.lower() == self.white.lower():
             return self.white_summary
@@ -68,10 +71,15 @@ def analyze_game(game: "chess.pgn.Game", analyzer: Analyzer) -> GameReport:
     """Grade every move of ``game`` with ``analyzer``."""
     board = game.board()
     headers = game.headers
+    type_game = "Broadcast" if headers.get("BroadcastName") is not None else "Standard"
+
     report = GameReport(
         white=headers.get("White", "?"),
+        elo_white=int(headers.get("WhiteElo", 0)),
         black=headers.get("Black", "?"),
-        result=headers.get("Result", "*"),
+        elo_black=int(headers.get("BlackElo", 0)),
+        result=headers.get("Result", "*"), 
+        type_game=type_game,
     )
 
     ply = 0
@@ -112,10 +120,11 @@ def analyze_game(game: "chess.pgn.Game", analyzer: Analyzer) -> GameReport:
     return report
 
 
-def iter_games(pgn_path: str):
+def iter_games(pgn_path: list[str]):
     """Yield every game in a PGN file."""
     if chess is None:
         raise RuntimeError("python-chess is not installed.")
+
     with open(pgn_path, encoding="utf-8") as fh:
         while (game := chess.pgn.read_game(fh)) is not None:
             yield game

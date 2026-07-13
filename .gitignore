@@ -3,3 +3,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+.DS_Store
+
+# Local datasets are too large for Git/GitHub.
+data/*
+!data/
+
+# Generated benchmark outputs.
+benchmark_data/

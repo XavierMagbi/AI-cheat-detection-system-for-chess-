@@ -53,11 +53,11 @@ class Analyzer:
 
     Use as a context manager::
 
-        with Analyzer(path, depth=18) as az:
+        with Analyzer(path, depth=12) as az:
             ev = az.evaluate(board)
     """
 
-    def __init__(self, engine_path: str, depth: int = 16, multipv: int = 1,
+    def __init__(self, engine_path: str, depth: int = 12, multipv: int = 1,
                  threads: int = 1, hash_mb: int = 128):
         if not _HAS_CHESS:
             raise RuntimeError(

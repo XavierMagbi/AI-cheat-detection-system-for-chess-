@@ -87,6 +87,43 @@ python3 -m venv .venv
 The math layer and its tests run with no dependencies, which is handy before
 installing anything.
 
+### Optional: installing Maia for human-like move analysis
+
+Stockfish is the main engine used by the current codebase. Maia is optional for
+the next analysis layer: instead of asking "what is the objectively best move?",
+Maia asks "what move would a human around this rating probably play?".
+
+I recommend starting with **Maia 3**, because it exposes a UCI-style engine
+interface and has small models that can run on CPU.
+
+```bash
+# From inside this project, after creating the venv above
+mkdir -p external
+git clone https://github.com/CSSLab/maia3.git external/maia3
+.venv/bin/pip install -e external/maia3
+
+# Download/cache the smallest model first.
+# This avoids the first analysis run waiting on a model download.
+.venv/bin/maia3-cache --model maia3-5m
+
+# Check the available Maia model aliases
+.venv/bin/maia3-uci --list-models
+```
+
+Useful Maia 3 model choices:
+
+- `maia3-5m` — best first try; smaller and more realistic for local CPU use.
+- `maia3-23m` — better move prediction, slower.
+- `maia3-79m` — strongest Maia 3 model, but much heavier.
+
+Maia 3 downloads model checkpoints from Hugging Face the first time they are
+used, then reuses the cached copy. If the laptop is struggling, use `maia3-5m`
+before trying larger models.
+
+Maia 1 is another option, but it is older and works differently: the Maia 1
+models are LCZero weights, so they need the `lc0` engine as the "body" and Maia
+as the "brain". For this project, Maia 3 is the simpler starting point.
+
 ## Usage
 
 ```bash
@@ -99,6 +136,63 @@ installing anything.
 
 Flags: `--engine /path/to/binary` if it's not on PATH, `--depth N` (deeper =
 slower but more accurate), `--threads N`.
+
+### Local datasets used for benchmarking
+
+There are two different kinds of PGN files in `data/`, and I keep them separate
+because they answer different questions.
+
+**Standard rated games** are ordinary Lichess rated games. These are the best
+fit for building baseline benchmarks by Elo range, because they represent
+normal online play rather than tournament broadcast relays.
+
+I merged the standard rated files currently present in `data/` into:
+
+```text
+data/lichess_db_standard_rated_selected.pgn
+```
+
+Files included:
+
+- `data/lichess_db_standard_rated_2013-09.pgn`
+- `data/lichess_db_standard_rated_2013-10.pgn`
+- `data/lichess_db_standard_rated_2013-11.pgn`
+- `data/lichess_db_standard_rated_2013-12.pgn`
+- `data/lichess_db_standard_rated_2017-02.pgn`
+
+Verification after merging:
+
+```text
+source games: 11996350
+merged games: 11996350
+merged size: 10.0 GB
+```
+
+This merged file is large, so benchmarking the whole thing with Stockfish will
+be slow. In practice, use `--nb_game` to sample a fixed number of matching games
+per Elo range.
+
+**Broadcast games** are tournament/study relay games. They are useful for
+experiments, but they are noisier for benchmark calibration because broadcasts
+can contain missing Elo tags, malformed moves, interrupted games, illegal SAN,
+or corrected relay positions.
+
+The broadcast merged file currently present is:
+
+```text
+data/lichess_db_broadcast_2023-01_to_06.pgn
+```
+
+I do **not** merge broadcast files into the standard benchmark file. Mixing them
+would blur the baseline: standard rated games describe ordinary online play,
+while broadcast PGNs describe tournament relay data with different quality and
+metadata assumptions.
+
+Typical standard benchmark command:
+
+```bash
+.venv/bin/python -m chesscheat.cli general_bench data/lichess_db_standard_rated_selected.pgn --depth 10 --threads 8 --nb_game 150
+```
 
 ### Example output
 
@@ -121,6 +215,62 @@ Morphy's Opera Game scoring as "suspicious" is the point: on a single brilliant
 game these metrics light up for anyone, which is exactly why I require multiple
 games and a human in the loop.
 
+## Stockfish vs Maia
+
+Stockfish and Maia answer different questions, so they should not be treated as
+interchangeable.
+
+**Stockfish** is an objective-strength engine. It tries to find the best chess
+move. In this project it gives the classic cheat-detection signals:
+
+- centipawn loss: how much quality the played move gave up;
+- top-move match: whether the player chose Stockfish's first choice;
+- accuracy: how much the move changed the expected result.
+
+That makes Stockfish good for measuring **how close the player is to optimal
+engine play**.
+
+**Maia** is a human-move model. It is trained to predict moves humans actually
+play at different rating levels. It is not mainly trying to be the strongest
+engine. It is trying to be human-like.
+
+That makes Maia useful for measuring **how plausible a move is for a player of
+that Elo range**.
+
+The important cheat-analysis idea is to combine both signals:
+
+```
+Stockfish says: this move is extremely strong
+Maia says: humans at this Elo almost never play this move
+```
+
+That combination is more interesting than Stockfish alone. A single Stockfish
+match can happen naturally, especially in obvious positions or known openings.
+But repeated moves that are both:
+
+- very strong according to Stockfish, and
+- unlikely according to Maia for that rating range,
+
+are a stronger signal that the play may not be natural for that Elo group.
+
+For Elo-range benchmarking, Maia can help build rating-relative baselines:
+
+- compare a 1500 player against a 1500-ish Maia setting;
+- compare a 2200 player against a 2200-ish Maia setting;
+- avoid using the same expectation for every rating group.
+
+In other words:
+
+```
+Stockfish = objective move quality
+Maia      = human-likeness for the Elo range
+Both      = better benchmark signal
+```
+
+At the current stage, the CLI is still Stockfish-centered. Maia should be added
+as a second analysis path, not as a blind replacement for Stockfish, because
+Maia does not provide the same kind of centipawn-loss meaning.
+
 ## Layout
 
 ```
@@ -131,7 +281,9 @@ chesscheat/
   profile.py    Cross-game suspicion scoring + reasons
   cli.py        CLI entry point (analyze / profile)
 data/
-  sample.pgn    Legal sample game (Morphy, Opera Game)
+  sample.pgn                                  Legal sample game (Morphy, Opera Game)
+  lichess_db_standard_rated_selected.pgn      Merged standard rated games for Elo benchmarks
+  lichess_db_broadcast_2023-01_to_06.pgn      Merged broadcast games, kept separate from standard
 tests/
   test_metrics.py   Dependency-free tests for the math layer
 ```
