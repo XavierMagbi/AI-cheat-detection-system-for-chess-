@@ -3,12 +3,12 @@ quality metrics. No engine or I/O here so these are trivially unit-testable.
 
 The two key ideas:
 
-* **Win percentage** — centipawns are not linear in "how won is this position".
+* **Win percentage** : centipawns are not linear in "how won is this position".
   +300cp matters far more at 0 than at +1500. We map cp -> expected score in
   [0, 100] with the logistic Lichess uses, so errors are weighted by how much
   they actually change the practical outcome.
 
-* **Accuracy** — a per-move score in [0, 100] derived from how much win% the
+* **Accuracy** : a per-move score in [0, 100] derived from how much win% the
   move threw away. A move that loses no win% scores ~100; a blunder scores low.
 """
 
@@ -41,6 +41,15 @@ def accuracy_from_win_drop(win_before: float, win_after: float) -> float:
     return max(0.0, min(100.0, acc))
 
 
+def matching_engine_play(best_move : str , player_move : str) -> bool :
+    
+    if best_move == player_move : 
+        return True 
+        
+    return False 
+
+
+
 # --- per-move record --------------------------------------------------------
 
 @dataclass
@@ -57,6 +66,7 @@ class MoveEval:
     win_before: float        # win% (mover POV) before the move, best line
     win_after: float         # win% (mover POV) after the move played
     accuracy: float          # per-move accuracy [0, 100]
+    is_maia_move: bool = False  # did the player play Maia's best move?
 
 
 # --- aggregation ------------------------------------------------------------
@@ -78,6 +88,7 @@ def summarize(moves: list[MoveEval], white: bool) -> dict:
     cp_losses = [m.cp_loss for m in side]
     accs = [m.accuracy for m in side]
     tops = sum(1 for m in side if m.is_top_move)
+    maias = sum(1 for m in side if m.is_maia_move)
     blunders = sum(1 for m in side if m.cp_loss >= 200)
 
     by_phase_acpl: dict[str, float] = {}
@@ -93,6 +104,7 @@ def summarize(moves: list[MoveEval], white: bool) -> dict:
         "acpl": _mean(cp_losses),
         "accuracy": _mean(accs),
         "top_move_pct": 100.0 * tops / len(side),
+        "maia_matching_pct": 100.0 * maias / len(side),
         "blunders": blunders,
         "acpl_by_phase": by_phase_acpl,
         "top_move_pct_by_phase": by_phase_top,

@@ -50,6 +50,7 @@ class EloProfile:
     avg_acpl: float = 0.0
     acpl_stdev: float = 0.0
     avg_match_pct: float = 0.0
+    avg_maia_pct : float = 0.0
     avg_accuracy: float = 0.0
     total_blunders: int = 0
     suspicion: float = 0.0                 # 0..100 weighted score
@@ -84,6 +85,7 @@ def benchmarking(
 
     acpls = [s["acpl"] for s in summaries]
     matches = [s["top_move_pct"] for s in summaries]
+    maia_matching = [s["maia_matching_pct"] for s in summaries]
     accuracies = [s["accuracy"] for s in summaries]
 
     def variance(values: list[float]) -> float:
@@ -92,6 +94,7 @@ def benchmarking(
     variance_acpl = variance(acpls)
     variance_accuracy = variance(accuracies)
     variance_match_pct = variance(matches)
+    variance_maia_pct = variance(maia_matching)
 
     data = {
         "elo_range": list(elo_range),
@@ -112,6 +115,11 @@ def benchmarking(
         "std_match_pct": math.sqrt(variance_match_pct),
         "high_median_match_pct": statistics.median_high(matches),
         "low_median_match_pct": statistics.median_low(matches),
+        "avg_maia_pct" : statistics.mean(maia_matching),
+        "variance_maia_pct": variance_maia_pct,
+        "std_maia_pct": math.sqrt(variance_maia_pct),
+        "high_median_maia_pct": statistics.median_high(maia_matching),
+        "low_median_maia_pct": statistics.median_low(maia_matching),
         "total_blunders": sum(s["blunders"] for s in summaries),
         "inference_seconds": inference_seconds,
     }
@@ -153,12 +161,12 @@ def _load_benchmark_data(elo_range: list[int],reports: list[GameReport]) -> dict
         if report.type_game =="Standard" :
             paths = [
                 Path("benchmark_data/standard") / f"benchmark_{low}_{high}.json",
-                _legacy_benchmark_path_for_elo_range(elo_range),
+                _legacy_benchmark_path_for_elo_range(elo_range,reports),
             ]
         else :
              paths = [
                 Path("benchmark_data/broadcast") / f"benchmark_{low}_{high}.json",
-                _legacy_benchmark_path_for_elo_range(elo_range),
+                _legacy_benchmark_path_for_elo_range(elo_range,reports),
             ]
             
 
@@ -178,6 +186,7 @@ def _load_benchmark_data(elo_range: list[int],reports: list[GameReport]) -> dict
 def build_profile(
     elo_range: list[int],
     reports: list[GameReport],
+    output_path: str | Path | None = None,
 ) -> EloProfile:
     low, high = elo_range
     summaries = []
@@ -201,6 +210,7 @@ def build_profile(
 
     acpls = [s["acpl"] for s in summaries]
     matches = [s["top_move_pct"] for s in summaries]
+    maia_matching = [s["maia_matching_pct"] for s in summaries]
     accuracies = [s["accuracy"] for s in summaries]
 
     profile.avg_acpl = statistics.mean(acpls)
@@ -208,10 +218,32 @@ def build_profile(
         statistics.pstdev(acpls) if len(acpls) > 1 else 0.0
     )
     profile.avg_match_pct = statistics.mean(matches)
+    profile.avg_maia_pct = statistics.mean(maia_matching)
     profile.avg_accuracy = statistics.mean(accuracies)
     profile.total_blunders = sum(s["blunders"] for s in summaries)
     profile.per_game = summaries
     profile.suspicion, profile.reasons = _score(profile,reports)
+    
+    
+    output_path = Path("results")/ f"result_{profile.elo_range}.json"
+    
+    
+    data = {
+    "Profile": profile.elo_range,
+    "Games_analysed ": profile.games,
+    "avg ACPL" : profile.avg_acpl,
+    "std_deviaiton" : profile.acpl_stdev,
+    " avg top-move % ": profile.avg_match_pct,
+    " avg_maia_move_matching %" : profile.avg_maia_pct,
+    "avg accuracy" : profile.avg_accuracy,
+    "total blunders" : profile.total_blunders,
+    "SUSPICION SCORE": profile.suspicion/100,
+    }
+    
+    
+    destination = Path(output_path) if output_path is not None else Path("results")/ f"result_{profile.elo_range}.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     return profile
 
@@ -263,7 +295,7 @@ def _score(p: EloProfile,reports: list[GameReport]) -> tuple[float, list[str]]:
     if p.avg_match_pct >= match_very_high:
         score += 35
         reasons.append(f"Very high engine top-move match ({p.avg_match_pct:.1f}%).")
-    elif p.avg_match_pct >= match_suspicious:
+    elif p.avg_match_pct >= match_suspicious and p.avg_match_pct >= match_suspicious :
         score += 18
         reasons.append(f"High engine top-move match ({p.avg_match_pct:.1f}%).")
 

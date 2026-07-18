@@ -10,10 +10,12 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from .analyze import analyze_game, iter_games
 from .engine import open_analyzer
+from .maia import open_maia_analyzer
 from .profile import build_profile, benchmarking, benchmark_path_for_elo_range
 
 
@@ -41,29 +43,66 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--engine", help="path to a UCI engine (default: search PATH)")
     p.add_argument("--depth", type=int, default=10, help="engine search depth")
     p.add_argument("--threads", type=int, default=8, help="engine threads")
-    p.add_argument("--nb_game", type=int, default=80, help="number of game selected in the dataset")
+    p.add_argument("--nb_game", type=int, default=500, help="number of game selected in the dataset")
+
+
+def _add_maia_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--use-maia", action="store_true", help="also run Maia human-move prediction")
+    p.add_argument("--maia-engine", help="path/command for Maia UCI engine")
+    p.add_argument("--maia-model", default="maia3-5m", help="Maia 3 model alias")
+    p.add_argument("--maia-elo", type=int, help="Maia Elo; default is midpoint of --elo_range when available")
+    p.add_argument("--maia-multipv", type=int, default=1, help="number of Maia candidate moves")
+    p.add_argument("--maia-nodes", type=int, default=1, help="Maia UCI nodes limit")
+    p.add_argument("--maia-temperature", type=float, default=0.0, help="Maia sampling temperature; 0 means deterministic")
+    p.add_argument("--maia-top-p", type=float, default=1.0, help="Maia nucleus sampling threshold")
+
+
+def _open_maia_from_args(args, elo_range: list[int] | None = None):
+    if not getattr(args, "use_maia", False):
+        return nullcontext(None)
+
+    maia_elo = args.maia_elo
+    if maia_elo is None and elo_range is not None:
+        low, high = elo_range
+        maia_elo = (low + high) // 2
+
+    kwargs = {
+        "model": args.maia_model,
+        "multipv": args.maia_multipv,
+        "nodes": args.maia_nodes,
+        "temperature": args.maia_temperature,
+        "top_p": args.maia_top_p,
+    }
+    if maia_elo is not None:
+        kwargs["elo"] = maia_elo
+    if elo_range is not None:
+        kwargs["elo_range_evaluated"] = elo_range
+
+    return open_maia_analyzer(engine_path=args.maia_engine, **kwargs)
     
 
 
 def cmd_analyze(args) -> int:
     """Analyse every game in a PGN and print per-side summaries."""
     with open_analyzer(args.engine, depth=args.depth, threads=args.threads) as az:
-        for i, game in enumerate(iter_games(args.pgn), 1):
-            report = analyze_game(game, az)
-            print(f"\n=== Game {i}: {report.white} vs {report.black} "
-                    f"({report.result}) ===")
-            for side, s in (("White", report.white_summary),("Black", report.black_summary)):
-                print(f"  {side:5} {report.white  if side=='White' else report.black}")
-                if side=='White' : 
-                    print (f" ELO : {report.elo_white} ")
-                else : 
-                    print (f" ELO : {report.elo_black} ")
-                print(f"moves={s['moves']}  ACPL={s['acpl']:.1f} "
-                        f"accuracy={s['accuracy']:.1f} "
-                        f"top-move={s['top_move_pct']:.1f}% "
-                        f"blunders={s['blunders']}")
-            if i >= args.nb_game:
-                break
+        with _open_maia_from_args(args) as maia:
+            for i, game in enumerate(iter_games(args.pgn), 1):
+                report = analyze_game(game, az, maia)
+                print(f"\n=== Game {i}: {report.white} vs {report.black} "
+                        f"({report.result}) ===")
+                for side, s in (("White", report.white_summary),("Black", report.black_summary)):
+                    print(f"  {side:5} {report.white  if side=='White' else report.black}")
+                    if side=='White' : 
+                        print (f" ELO : {report.elo_white} ")
+                    else : 
+                        print (f" ELO : {report.elo_black} ")
+                    print(f"moves={s['moves']}  ACPL={s['acpl']:.1f} "
+                            f"accuracy={s['accuracy']:.1f} "
+                            f"top-move={s['top_move_pct']:.1f}% "
+                            f"maia-match={s['maia_matching_pct']:.1f}% "
+                            f"blunders={s['blunders']}")
+                if i >= args.nb_game:
+                    break
         
     return 0
 
@@ -77,42 +116,40 @@ def cmd_single_benchmark(args)->int:
         depth=args.depth,
         threads=args.threads,
     ) as az:
-        for game in iter_games(args.pgn):
-            headers = game.headers
-
-            try:
-                white_elo = int(headers.get("WhiteElo", 0))
-                black_elo = int(headers.get("BlackElo", 0))
-            except (TypeError, ValueError):
-                continue
-
-            white_matches = low <= white_elo < high
-            black_matches = low <= black_elo < high
-
-            # Crucially, skip before invoking Stockfish
-            if not white_matches and not black_matches:
-                continue
-
-            reports.append(analyze_game(game, az))
+        with _open_maia_from_args(args, args.elo_range) as maia:
+            for game in iter_games(args.pgn):
+                headers = game.headers
+                try:
+                    white_elo = int(headers.get("WhiteElo", 0))
+                    black_elo = int(headers.get("BlackElo", 0))
+                except (TypeError, ValueError):
+                    continue
+                
+                white_matches = low <= white_elo < high
+                black_matches = low <= black_elo < high
+                
+                # Crucially, skip before invoking Stockfish
+                if not white_matches and not black_matches:
+                    continue
+                
+                reports.append(analyze_game(game, az, maia))
+                
+                if len(reports) >= args.nb_game:
+                    break
+                
+            inference_seconds = time.perf_counter() - start_time
+            output_path = benchmark_path_for_elo_range(args.elo_range,reports)
+            result = benchmarking(
+                args.elo_range,
+                reports,
+                inference_seconds=inference_seconds,
+                output_path=output_path,
+            )
+            if result is None:
+                print(f"\n=== ELO Benchmark: {low}–{high} ===")
+                print("  skipped: no analysable player sides found")
+                return 0
             
-            
-
-            if len(reports) >= args.nb_game:
-                break
-
-    inference_seconds = time.perf_counter() - start_time
-    output_path = benchmark_path_for_elo_range(args.elo_range,reports)
-    result = benchmarking(
-        args.elo_range,
-        reports,
-        inference_seconds=inference_seconds,
-        output_path=output_path,
-    )
-    if result is None:
-        print(f"\n=== ELO Benchmark: {low}–{high} ===")
-        print("  skipped: no analysable player sides found")
-        return 0
-
     print(f"\n=== ELO Benchmark: {low}–{high} ===")
     print(f"  games analysed      : {result['games_analyzed']}")
     print(f"  player-side samples : {result['player_side_samples']}")
@@ -137,29 +174,28 @@ def cmd_general_benchmark(args)->int:
             depth=args.depth,
             threads=args.threads,
         ) as az:
-            for game in iter_games(args.pgn):
-                headers = game.headers
-                
-                try:
-                    white_elo = int(headers.get("WhiteElo", 0))
-                    black_elo = int(headers.get("BlackElo", 0))
+            maia_context = _open_maia_from_args(args, elo_range)
+            with maia_context as maia:
+                for game in iter_games(args.pgn):
+                    headers = game.headers
                     
-                except (TypeError, ValueError):
-                    continue
-                
-                white_matches = low <= white_elo < high
-                black_matches = low <= black_elo < high
-                
-                 
+                    try:
+                        white_elo = int(headers.get("WhiteElo", 0))
+                        black_elo = int(headers.get("BlackElo", 0))
+                        
+                    except (TypeError, ValueError):
+                        continue
                     
-                
-                # Crucially, skip before invoking Stockfish
-                if not white_matches and not black_matches:
-                    continue
-                
-                reports.append(analyze_game(game, az))
-                if len(reports) >= args.nb_game:
-                    break
+                    white_matches = low <= white_elo < high
+                    black_matches = low <= black_elo < high
+                    
+                    # Crucially, skip before invoking Stockfish
+                    if not white_matches and not black_matches:
+                        continue
+                    
+                    reports.append(analyze_game(game, az, maia))
+                    if len(reports) >= args.nb_game:
+                        break
 
             inference_seconds = time.perf_counter() - start_time
             output_path = benchmark_path_for_elo_range(elo_range,reports)
@@ -196,34 +232,39 @@ def cmd_general_benchmark(args)->int:
 def cmd_profile(args) -> int:
     low, high = args.elo_range
     reports = []
-
+    
+    start_time = time.perf_counter()
+    
     with open_analyzer(
         args.engine,
         depth=args.depth,
         threads=args.threads,
     ) as az:
-        for game in iter_games(args.pgn):
-            headers = game.headers
+        with _open_maia_from_args(args, args.elo_range) as maia:
+            for game in iter_games(args.pgn):
+                headers = game.headers
 
-            try:
-                white_elo = int(headers.get("WhiteElo", 0))
-                black_elo = int(headers.get("BlackElo", 0))
-            except (TypeError, ValueError):
-                continue
+                try:
+                    white_elo = int(headers.get("WhiteElo", 0))
+                    black_elo = int(headers.get("BlackElo", 0))
+                except (TypeError, ValueError):
+                    continue
 
-            white_matches = low <= white_elo < high
-            black_matches = low <= black_elo < high
+                white_matches = low <= white_elo < high
+                black_matches = low <= black_elo < high
 
-            # Crucially, skip before invoking Stockfish
-            if not white_matches and not black_matches:
-                continue
+                # Crucially, skip before invoking Stockfish
+                if not white_matches and not black_matches:
+                    continue
 
-            reports.append(analyze_game(game, az))
+                reports.append(analyze_game(game, az, maia))
 
-            if len(reports) >= args.nb_game:
-                break
+                if len(reports) >= args.nb_game:
+                    break
 
     prof = build_profile(args.elo_range, reports)
+    
+    inference_seconds = time.perf_counter() - start_time
 
     print(f"\n=== ELO Profile: {low}–{high} ===")
     print(f"  samples analysed: {prof.games}")
@@ -234,7 +275,10 @@ def cmd_profile(args) -> int:
     print(f"  avg accuracy   : {prof.avg_accuracy:.1f}")
     print(f"  total blunders : {prof.total_blunders}")
     print(f"\n  SUSPICION SCORE: {prof.suspicion:.0f}/100")
+    print(f"Inference Time : {inference_seconds}")
     print("  reasons:")
+    
+    
     
     for r in prof.reasons:
         print(f"    - {r}")
@@ -258,6 +302,7 @@ def main(argv: list[str] | None = None) -> int:
     a = sub.add_parser("analyze", help="grade every game in a PGN")
     a.add_argument("pgn", help="path to a .pgn file")
     _add_engine_args(a)
+    _add_maia_args(a)
     a.set_defaults(func=cmd_analyze)
 
     pr = sub.add_parser("profile", help="profile one player across many games")
@@ -265,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--player", required=False, help="player name as in the PGN")
     pr.add_argument("--elo_range",type = int , nargs = 2 ,metavar=("MIN_ELO", "MAX_ELO"), default=[1400, 3000],help="ELO range that we want to evaluate for")
     _add_engine_args(pr)
+    _add_maia_args(pr)
     pr.set_defaults(func=cmd_profile)
     
     
@@ -272,12 +318,14 @@ def main(argv: list[str] | None = None) -> int:
     bch_mark.add_argument("pgn", help="path to a .pgn file")
     bch_mark.add_argument("--elo_range",type = int , nargs = 2 ,metavar=("MIN_ELO", "MAX_ELO"), default=[2000, 2299],help="ELO range that we want to evaluate for")
     _add_engine_args(bch_mark)
+    _add_maia_args(bch_mark)
     bch_mark.set_defaults(func=cmd_single_benchmark)
     
     
     gen_bench = sub.add_parser("general_bench", help="benchmark across all ELO ranges of players ")
     gen_bench.add_argument("pgn", help="path to a .pgn file")
     _add_engine_args(gen_bench)
+    _add_maia_args(gen_bench)
     gen_bench.set_defaults(func=cmd_general_benchmark)
 
     args = parser.parse_args(argv)

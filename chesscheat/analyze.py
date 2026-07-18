@@ -18,7 +18,8 @@ except ImportError:  # pragma: no cover
     chess = None
 
 from .engine import Analyzer
-from .metrics import MoveEval, accuracy_from_win_drop, cp_to_win_percent, summarize
+from .maia import MaiaAnalyzer
+from .metrics import MoveEval, accuracy_from_win_drop, cp_to_win_percent, matching_engine_play, summarize
 
 # Cap per-move centipawn loss. Without this a single move into a forced mate
 # scores ~100000cp and swamps the average. 1000cp (~10 pawns) is already
@@ -67,8 +68,14 @@ class GameReport:
         return None
 
 
-def analyze_game(game: "chess.pgn.Game", analyzer: Analyzer) -> GameReport:
+def analyze_game(
+    game: "chess.pgn.Game",
+    lichess_analyzer: Analyzer,
+    maia_analyzer: MaiaAnalyzer | None = None,
+) -> GameReport:
     """Grade every move of ``game`` with ``analyzer``."""
+    
+    
     board = game.board()
     headers = game.headers
     type_game = "Broadcast" if headers.get("BroadcastName") is not None else "Standard"
@@ -89,7 +96,8 @@ def analyze_game(game: "chess.pgn.Game", analyzer: Analyzer) -> GameReport:
         phase = _phase(board, ply)
 
         # Evaluate the position BEFORE the move: gives best move + best score.
-        before = analyzer.evaluate(board)
+        before = lichess_analyzer.evaluate(board)
+        prediction = maia_analyzer.predict(board) if maia_analyzer is not None else None
         win_before = cp_to_win_percent(before.score_cp)
         best_san = board.san(before.best_move) if before.best_move else "?"
         played_san = board.san(move)
@@ -98,8 +106,15 @@ def analyze_game(game: "chess.pgn.Game", analyzer: Analyzer) -> GameReport:
         # Play the move, then evaluate from the opponent's POV and negate to get
         # the score from the mover's POV after their move.
         board.push(move)
-        after = analyzer.evaluate(board)
+        after = lichess_analyzer.evaluate(board)
         win_after = cp_to_win_percent(-after.score_cp)
+        is_maia = (
+            matching_engine_play(prediction.best_move, move)
+            if prediction is not None
+            else False
+        )
+        
+        
 
         cp_loss = min(MAX_CP_LOSS, max(0.0, before.score_cp - (-after.score_cp)))
         report.moves.append(MoveEval(
@@ -109,6 +124,7 @@ def analyze_game(game: "chess.pgn.Game", analyzer: Analyzer) -> GameReport:
             phase=phase,
             best_san=best_san,
             is_top_move=is_top,
+            is_maia_move=is_maia,
             cp_loss=cp_loss,
             win_before=win_before,
             win_after=win_after,

@@ -1,0 +1,13 @@
+{
+  "Profile": [
+    1800,
+    1999
+  ],
+  "Games_analysed ": 66,
+  "avg ACPL": 58.13396855984047,
+  "std_deviaiton": 32.78986049774843,
+  " avg top-move % ": 38.340539985070315,
+  "avg accuracy": 89.2700672420718,
+  "total blunders": 147,
+  "SUSPICION SCORE": 0.15
+}
