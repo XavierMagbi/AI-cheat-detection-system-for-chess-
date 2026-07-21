@@ -55,6 +55,9 @@ def _add_maia_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--maia-nodes", type=int, default=1, help="Maia UCI nodes limit")
     p.add_argument("--maia-temperature", type=float, default=0.0, help="Maia sampling temperature; 0 means deterministic")
     p.add_argument("--maia-top-p", type=float, default=1.0, help="Maia nucleus sampling threshold")
+    p.add_argument("--maia-timeout", type=float, default=120.0, help="seconds to wait for Maia to start")
+    p.add_argument("--maia-device", default="cpu", help="Maia inference device, e.g. cpu, mps, or cuda")
+    p.add_argument("--maia-use-amp", action="store_true", help="allow Maia automatic mixed precision")
 
 
 def _open_maia_from_args(args, elo_range: list[int] | None = None):
@@ -72,6 +75,9 @@ def _open_maia_from_args(args, elo_range: list[int] | None = None):
         "nodes": args.maia_nodes,
         "temperature": args.maia_temperature,
         "top_p": args.maia_top_p,
+        "timeout": args.maia_timeout,
+        "device": args.maia_device,
+        "use_amp": args.maia_use_amp,
     }
     if maia_elo is not None:
         kwargs["elo"] = maia_elo
@@ -287,6 +293,64 @@ def cmd_profile(args) -> int:
     
     return 0
 
+def cmd_profile_all(args) -> int:
+    for elo_range in ELO_RANGES :
+        low, high = elo_range
+        reports = []
+        start_time = time.perf_counter()
+        
+        with open_analyzer(
+        args.engine,
+        depth=args.depth,
+        threads=args.threads,
+        ) as az:
+            with _open_maia_from_args(args, elo_range) as maia:
+                for game in iter_games(args.pgn):
+                    headers = game.headers
+                    
+                    try:
+                        white_elo = int(headers.get("WhiteElo", 0))
+                        black_elo = int(headers.get("BlackElo", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    
+                    white_matches = low <= white_elo < high
+                    black_matches = low <= black_elo < high
+                    
+                    # Crucially, skip before invoking Stockfish
+                    if not white_matches and not black_matches:
+                        continue
+                    
+                    reports.append(analyze_game(game, az, maia))
+                    
+                    if len(reports) >= args.nb_game:
+                        break
+                    
+        prof = build_profile(elo_range, reports)
+            
+        inference_seconds = time.perf_counter() - start_time
+        
+        print(f"\n=== ELO Profile: {low}–{high} ===")
+        print(f"  samples analysed: {prof.games}")
+        print(f"\n=== Profile: {prof.elo_range} ===")
+        print(f"  games analysed : {prof.games}")
+        print(f"  avg ACPL       : {prof.avg_acpl:.1f}  (stdev {prof.acpl_stdev:.1f})")
+        print(f"  avg top-move % : {prof.avg_match_pct:.1f}")
+        print(f"  avg accuracy   : {prof.avg_accuracy:.1f}")
+        print(f"  total blunders : {prof.total_blunders}")
+        print(f"\n  SUSPICION SCORE: {prof.suspicion:.0f}/100")
+        print(f"Inference Time : {inference_seconds}")
+        print("  reasons:")
+        
+        for r in prof.reasons:
+            print(f"    - {r}")
+            print("\n  NOTE: this is a statistical indicator, not proof. Always have a "
+          "human review the actual games before acting on an account.")
+    
+    return 0
+    
+        
+
 
 
   
@@ -305,13 +369,20 @@ def main(argv: list[str] | None = None) -> int:
     _add_maia_args(a)
     a.set_defaults(func=cmd_analyze)
 
-    pr = sub.add_parser("profile", help="profile one player across many games")
+    pr = sub.add_parser("profile", help="profile one elo range across many games")
     pr.add_argument("pgn", help="path to a .pgn file")
     pr.add_argument("--player", required=False, help="player name as in the PGN")
     pr.add_argument("--elo_range",type = int , nargs = 2 ,metavar=("MIN_ELO", "MAX_ELO"), default=[1400, 3000],help="ELO range that we want to evaluate for")
     _add_engine_args(pr)
     _add_maia_args(pr)
     pr.set_defaults(func=cmd_profile)
+    
+    
+    gen_pr = pr = sub.add_parser("general_profile", help="profile all elo ranges across many games")
+    gen_pr.add_argument("pgn", help="path to a .pgn file")
+    _add_engine_args(gen_pr)
+    _add_maia_args(gen_pr)
+    gen_pr.set_defaults(func=cmd_profile_all)
     
     
     bch_mark= sub.add_parser("benchmarking", help="benchmark one ELO range of players ")

@@ -190,6 +190,8 @@ def build_profile(
 ) -> EloProfile:
     low, high = elo_range
     summaries = []
+    
+    broadcast = True
 
     for report in reports:
         if low <= report.elo_white < high:
@@ -199,6 +201,9 @@ def build_profile(
             summaries.append(report.black_summary)
 
     summaries = [s for s in summaries if s["moves"] > 0]
+    
+    if report.type_game =="Standard" :
+        broadcast = False
 
     profile = EloProfile(
         elo_range=list(elo_range),
@@ -225,7 +230,11 @@ def build_profile(
     profile.suspicion, profile.reasons = _score(profile,reports)
     
     
-    output_path = Path("results")/ f"result_{profile.elo_range}.json"
+    
+    if (broadcast):
+         output_path = Path("results/broadcast_games")/ f"result_{profile.elo_range}.json"
+    else :
+         output_path = Path("results/standard_games")/ f"result_{profile.elo_range}.json"
     
     
     data = {
@@ -269,6 +278,10 @@ def _score(p: EloProfile,reports: list[GameReport]) -> tuple[float, list[str]]:
     acpl_very_low = d["avg_acpl"] - benchmark_std("acpl")        # and below this is strongly notable
     match_suspicious = d["avg_match_pct"]    # engine top-move % above this is notable
     match_very_high = d["avg_match_pct"] + benchmark_std("match_pct")
+    match_too_high = d["avg_match_pct"] + 2*benchmark_std("match_pct")
+    matching_maia_suspicious =  d["avg_maia_pct"]
+    matching_maia_very_low =  d["avg_maia_pct"]-benchmark_std("match_pct")
+    matching_maia_too_low =  d["avg_maia_pct"]- 2*benchmark_std("match_pct")
     acpl_stdev_low = benchmark_std("acpl")       # low game-to-game variance in ACPL
     min_games = d["player_side_samples"]/2              #
 
@@ -291,13 +304,33 @@ def _score(p: EloProfile,reports: list[GameReport]) -> tuple[float, list[str]]:
         score += 20
         reasons.append(f"Low average centipawn loss ({p.avg_acpl:.1f}).")
 
-    # High engine top-move agreement.
-    if p.avg_match_pct >= match_very_high:
+    # High engine top-move agreement & Low maia top-move agreement.
+    
+    
+    if p.avg_match_pct >= match_too_high and p.avg_maia_pct <= matching_maia_too_low :
+        score += 50
+        reasons.append(f"Very high engine top-move match ({p.avg_match_pct:.1f}%) and very low human-like moves.")
+    
+    elif p.avg_match_pct >= match_too_high and p.avg_maia_pct > matching_maia_too_low :
+        score += 45
+        reasons.append(f"Very high engine top-move match ({p.avg_match_pct:.1f}%).")
+    
+    elif p.avg_match_pct >= match_very_high and p.avg_maia_pct <= matching_maia_very_low :
+        score += 40
+        reasons.append(f"Very high engine top-move match ({p.avg_match_pct:.1f}%) and very low human-like moves.")
+        
+    elif p.avg_match_pct >= match_very_high and p.avg_maia_pct > matching_maia_very_low :
         score += 35
         reasons.append(f"Very high engine top-move match ({p.avg_match_pct:.1f}%).")
-    elif p.avg_match_pct >= match_suspicious and p.avg_match_pct >= match_suspicious :
+        
+    elif p.avg_match_pct >= match_suspicious and  p.avg_maia_pct <= matching_maia_suspicious :
+        score += 20 
+        reasons.append(f"High engine top-move match  ({p.avg_match_pct:.1f}%) and very low human-like matching move ({p.avg_match_pct:.1f}%).")
+        
+    elif p.avg_match_pct >= match_suspicious  :
         score += 18
         reasons.append(f"High engine top-move match ({p.avg_match_pct:.1f}%).")
+
 
     # Low game-to-game variance (only meaningful with several games).
     if p.games >= min_games and p.acpl_stdev <= acpl_stdev_low:

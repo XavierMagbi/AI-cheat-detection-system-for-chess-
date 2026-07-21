@@ -12,8 +12,10 @@ can ask a simple question:
 from __future__ import annotations
 
 import os
+import importlib.util
 import shlex
 import shutil
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -67,22 +69,35 @@ def find_engine(explicit: str | None = None) -> str | None:
         first_word = shlex.split(explicit)[0]
         return explicit if shutil.which(first_word) or _is_file(first_word) else None
 
+    python_bin_dirs = [
+        Path(sys.executable).parent,
+        Path(sys.prefix) / "bin",
+    ]
     for name in MAIA_COMMANDS:
         path = shutil.which(name)
         if path:
             return path
+        for python_bin_dir in python_bin_dirs:
+            venv_path = python_bin_dir / name
+            if venv_path.is_file():
+                return str(venv_path)
+
+    if importlib.util.find_spec("maia3") is not None:
+        return f"{sys.executable} -m maia3.uci"
 
     return None
 
 
 def _command_uses_maia3_uci(command: list[str]) -> bool:
     executable = Path(command[0]).name
-    return executable == "maia3-uci" or command[:3] == ["python", "-m", "maia3.uci"]
+    return executable == "maia3-uci" or command[1:3] == ["-m", "maia3.uci"]
 
 
 def build_command(
     engine_path: str,
     model: str = "maia3-5m",
+    device: str | None = "cpu",
+    use_amp: bool = False,
     use_uci_history: bool = True,
 ) -> list[str]:
     """Build the command passed to ``python-chess``.
@@ -97,6 +112,12 @@ def build_command(
 
     if _command_uses_maia3_uci(command) and use_uci_history and "--use-uci-history" not in command:
         command.append("--use-uci-history")
+
+    if device and "--device" not in command:
+        command.extend(["--device", device])
+
+    if not use_amp and "--no-use-amp" not in command:
+        command.append("--no-use-amp")
 
     return command
 
@@ -133,6 +154,9 @@ class MaiaAnalyzer:
         nodes: int = 1,
         temperature: float = 0.0,
         top_p: float = 1.0,
+        timeout: float = 120.0,
+        device: str | None = "cpu",
+        use_amp: bool = False,
         use_uci_history: bool = True,
     ):
         if not _HAS_CHESS:
@@ -152,8 +176,17 @@ class MaiaAnalyzer:
         self.nodes = nodes
         self.temperature = temperature
         self.top_p = top_p
+        self.timeout = timeout
+        self.device = device
+        self.use_amp = use_amp
         self.use_uci_history = use_uci_history
-        self.command = build_command(engine_path, model=model, use_uci_history=use_uci_history)
+        self.command = build_command(
+            engine_path,
+            model=model,
+            device=device,
+            use_amp=use_amp,
+            use_uci_history=use_uci_history,
+        )
         self._engine: "chess.engine.SimpleEngine | None" = None
         
         for Elo, Elo_range in MAIA_ELOS.items() :
@@ -165,7 +198,10 @@ class MaiaAnalyzer:
                 
 
     def __enter__(self) -> "MaiaAnalyzer":
-        self._engine = chess.engine.SimpleEngine.popen_uci(self.command)
+        self._engine = chess.engine.SimpleEngine.popen_uci(
+            self.command,
+            timeout=self.timeout,
+        )
         self._configure_if_supported("Elo", self.elo)
         self._configure_if_supported("SelfElo", self.self_elo)
         self._configure_if_supported("OppoElo", self.opponent_elo)

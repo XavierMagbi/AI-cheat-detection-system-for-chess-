@@ -1,0 +1,14 @@
+{
+  "Profile": [
+    2800,
+    2999
+  ],
+  "Games_analysed ": 103,
+  "avg ACPL": 18.525098233413132,
+  "std_deviaiton": 14.90197295891103,
+  " avg top-move % ": 56.60054953607522,
+  " avg_maia_move_matching %": 50.13086042239557,
+  "avg accuracy": 96.26626960540888,
+  "total blunders": 68,
+  "SUSPICION SCORE": 0.0
+}

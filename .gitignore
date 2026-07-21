@@ -5,6 +5,9 @@ __pycache__/
 *.egg-info/
 .DS_Store
 
+# Local third-party checkouts / editable dependencies.
+external/
+
 # Local datasets are too large for Git/GitHub.
 data/*
 !data/

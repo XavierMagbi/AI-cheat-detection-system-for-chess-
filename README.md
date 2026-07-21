@@ -177,10 +177,25 @@ experiments, but they are noisier for benchmark calibration because broadcasts
 can contain missing Elo tags, malformed moves, interrupted games, illegal SAN,
 or corrected relay positions.
 
-The broadcast merged file currently present is:
+The broadcast files currently present in `data/` have been merged into:
 
 ```text
-data/lichess_db_broadcast_2023-01_to_06.pgn
+data/lichess_db_broadcast_2026-01_05_06.pgn
+```
+
+Files included:
+
+- `data/lichess_db_broadcast_2026-01.pgn`
+- `data/lichess_db_broadcast_2026-05.pgn`
+- `data/lichess_db_broadcast_2026-06.pgn`
+
+Verification after de-duplicating by `GameURL`:
+
+```text
+source games: 99805
+merged games: 99805
+duplicates skipped: 0
+merged size: 404 MB
 ```
 
 I do **not** merge broadcast files into the standard benchmark file. Mixing them
@@ -267,23 +282,31 @@ Maia      = human-likeness for the Elo range
 Both      = better benchmark signal
 ```
 
-At the current stage, the CLI is still Stockfish-centered. Maia should be added
-as a second analysis path, not as a blind replacement for Stockfish, because
-Maia does not provide the same kind of centipawn-loss meaning.
+Maia is now treated as an optional second analysis path, not as a blind
+replacement for Stockfish, because Maia does not provide the same kind of
+centipawn-loss meaning.
 
 ## Layout
 
 ```
 chesscheat/
   engine.py     UCI engine wrapper (Stockfish)
+  maia.py       UCI wrapper for Maia human-move prediction
   analyze.py    Single-game move-by-move analysis -> GameReport
   metrics.py    Pure math: win%, accuracy, aggregation (no deps)
   profile.py    Cross-game suspicion scoring + reasons
   cli.py        CLI entry point (analyze / profile)
+benchmark_data/
+  standard/       Elo-range benchmark summaries from standard rated games
+  broadcast/      Elo-range benchmark summaries from broadcast games
+results/
+  standard_games/ Profile outputs from standard rated games
+  broadcast_games/Profile outputs from broadcast games
 data/
-  sample.pgn                                  Legal sample game (Morphy, Opera Game)
   lichess_db_standard_rated_selected.pgn      Merged standard rated games for Elo benchmarks
-  lichess_db_broadcast_2023-01_to_06.pgn      Merged broadcast games, kept separate from standard
+  lichess_db_broadcast_2026-01_05_06.pgn      Merged broadcast games, kept separate from standard
+scripts/
+  merge_pgn_datasets.py                       Streaming PGN merge utility with duplicate detection
 tests/
   test_metrics.py   Dependency-free tests for the math layer
 ```
@@ -309,17 +332,140 @@ games, bucketed by rating and time control) and then to tune the thresholds, or
 replace the hand-weighted score with a trained classifier. The priority is
 keeping false positives low — a wrong accusation is worse than a missed cheater.
 
-## What's next
+## Potential improvements
 
-1. Rating-relative thresholds.
-2. Move-time analysis from PGN clock tags (`%clk`) — humans think longer on hard
-   moves; engine users often blitz the hard ones and stall on easy ones. Strong
-   independent signal, needs no engine.
-3. Pull games straight from the Lichess and Chess.com public APIs instead of
-   needing a PGN file.
-4. Labelled-data calibration, then an ML classifier.
-5. A per-player HTML report with charts for a human reviewer.
-6. Skip opening-book moves so theory isn't graded as brilliance.
+The project already has the important benchmark hygiene pieces in place: fixed
+sample counts through `--nb_game`, separate standard/broadcast benchmark
+folders, Elo-range benchmarking, and pre-analysis filtering for Elo range
+selection. The next improvements are less about adding raw features and more
+about making the evidence easier to audit, visualize, and explain.
+
+### 1. Make filtering auditable
+
+Filtering is currently mostly silent. I want every benchmark/profile run to
+produce a small metadata summary alongside the numerical result:
+
+```text
+games scanned
+games outside Elo range
+games skipped for missing/non-numeric Elo
+games skipped for invalid PGN / illegal SAN
+games skipped for being too short
+games analysed
+source file
+Stockfish depth / threads
+Maia model / Elo / MultiPV
+```
+
+This would make it clear whether a result is based on a healthy sample or on a
+thin/noisy slice of the dataset.
+
+### 2. Moderate the score with confidence
+
+The suspicion score should not be read as a verdict. It should be presented as:
+
+```text
+suspicion score
+confidence level
+main reasons
+data-quality warnings
+```
+
+For example, a high score from only five games should be visibly weaker than a
+similar score from 100 clean games. The final output should say "worth human
+review", not "cheater".
+
+### 3. Split the score into sub-scores
+
+The current score is useful, but a single number hides the evidence. A better
+report would separate:
+
+```text
+Stockfish strength score      low ACPL, high accuracy, high top-move match
+Maia plausibility score       how human-like the moves are for the Elo range
+Consistency score             unusually low game-to-game variance
+Data quality score            sample size and skipped-game quality
+```
+
+This makes the output easier to challenge and easier to improve.
+
+### 4. Use stronger Stockfish + Maia combined metrics
+
+Low Maia match alone is not suspicious: a player can simply make bad or unusual
+human moves. The stronger signal is the mismatch between objective strength and
+human plausibility:
+
+```text
+Stockfish likes the move
+Maia says humans at this Elo usually do not play it
+```
+
+Useful future metrics:
+
+```text
+stockfish_top_not_maia_top_k_pct
+low_cp_loss_not_maia_top_k_pct
+maia_top_k_match_pct
+maia_rank_of_played_move
+```
+
+These are more meaningful than treating Maia mismatch as suspicious by itself.
+
+### 5. Add reviewer-friendly visualizations
+
+The JSON outputs are useful for machines, but human review needs pictures. The
+most useful first charts would be:
+
+- **ACPL distribution by Elo range** — benchmark distribution with the profiled
+  player marked.
+- **Stockfish match % vs Maia match % scatter plot** — the suspicious quadrant
+  is high Stockfish match with low Maia plausibility.
+- **Per-game timeline** — ACPL, accuracy, top-move match, and Maia match across
+  games to reveal sudden changes or unusually stable performance.
+- **Phase breakdown** — opening / middlegame / endgame, because selective
+  engine use often appears in sharp middlegames rather than everywhere.
+- **Move-level review table** — played move, Stockfish best move, Maia predicted
+  move, CP loss, Stockfish match, Maia match/top-k, and a review flag.
+
+### 6. Add opening-book and short-game handling
+
+Opening theory can inflate Stockfish match percentage, and very short games can
+make all percentages noisy. Future benchmark/profile runs should explicitly
+record:
+
+```text
+opening moves skipped or counted separately
+minimum analysed moves per side
+number of games excluded as too short
+```
+
+### 7. Improve reproducibility
+
+Every benchmark should be reproducible from its output files. The saved JSON
+should eventually include:
+
+```text
+dataset type: standard or broadcast
+source PGN
+engine versions
+Stockfish depth
+Maia model and Elo settings
+sample target
+random seed if random sampling is used
+created timestamp
+```
+
+That way, results can be compared months later without guessing how they were
+generated.
+
+### 8. Longer-term improvements
+
+- Move-time analysis from PGN clock tags (`%clk`): humans usually spend more
+  time on hard moves; engine users can show a different timing profile.
+- Pull games from Lichess/Chess.com APIs instead of requiring local PGN files.
+- Labelled-data calibration with clean and confirmed-engine-use examples.
+- A trained classifier only after the hand-built features are trustworthy.
+- A small HTML report for human reviewers.
 
 ### If I ever revisit the "scan the computer" idea
 
