@@ -67,6 +67,7 @@ class MoveEval:
     win_after: float         # win% (mover POV) after the move played
     accuracy: float          # per-move accuracy [0, 100]
     is_maia_move: bool = False  # did the player play Maia's best move?
+    maia_san: str = "?"      # Maia's predicted move in SAN, if Maia was enabled
 
 
 # --- aggregation ------------------------------------------------------------
@@ -81,7 +82,7 @@ def summarize(moves: list[MoveEval], white: bool) -> dict:
     if not side:
         return {
             "moves": 0, "acpl": 0.0, "accuracy": 0.0,
-            "top_move_pct": 0.0, "blunders": 0,
+            "top_move_pct": 0.0, "maia_matching_pct": 0.0, "blunders": 0,
             "acpl_by_phase": {}, "top_move_pct_by_phase": {},
         }
 

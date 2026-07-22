@@ -209,6 +209,54 @@ Typical standard benchmark command:
 .venv/bin/python -m chesscheat.cli general_bench data/lichess_db_standard_rated_selected.pgn --depth 10 --threads 8 --nb_game 150
 ```
 
+### Visualization notebook and reviewer report
+
+JSON is useful for automation, but reviewing a suspicious profile is much
+easier with pictures. The repo includes a notebook for that:
+
+```text
+notebooks/reviewer_visualizations.ipynb
+```
+
+The notebook reads:
+
+```text
+benchmark_data/standard/*.json
+benchmark_data/broadcast/*.json
+results/standard_games/*.json
+results/broadcast_games/*.json
+```
+
+and writes a human-readable report to:
+
+```text
+reports/visualization_report/README.md
+```
+
+The first generated charts are:
+
+- **ACPL by Elo range** — benchmark mean and spread, with the profiled result
+  marked when a matching profile JSON exists.
+- **Stockfish match % vs Maia match %** — a scatter plot for the combined
+  signal: high Stockfish agreement with low Maia plausibility.
+
+The notebook is deliberately dependency-light: it uses plain Python and PNG
+output, so it does not require pandas or matplotlib.
+
+The deeper reviewer views need richer profile JSONs. After rerunning
+`profile`/`general_profile` with the current code, the result files can include:
+
+```text
+per_game      ACPL, accuracy, Stockfish match %, Maia match % by game
+move_review   played move, Stockfish best, Maia predicted move, CP loss, flags
+```
+
+Those fields unlock:
+
+- per-game timelines;
+- opening / middlegame / endgame breakdowns;
+- move-level review tables.
+
 ### Example output
 
 ```
@@ -302,6 +350,10 @@ benchmark_data/
 results/
   standard_games/ Profile outputs from standard rated games
   broadcast_games/Profile outputs from broadcast games
+notebooks/
+  reviewer_visualizations.ipynb               Reviewer charts for benchmark/profile JSON
+reports/
+  visualization_report/                       Generated PNG figures + Markdown report
 data/
   lichess_db_standard_rated_selected.pgn      Merged standard rated games for Elo benchmarks
   lichess_db_broadcast_2026-01_05_06.pgn      Merged broadcast games, kept separate from standard
@@ -411,10 +463,11 @@ maia_rank_of_played_move
 
 These are more meaningful than treating Maia mismatch as suspicious by itself.
 
-### 5. Add reviewer-friendly visualizations
+### 5. Improve reviewer-friendly visualizations
 
-The JSON outputs are useful for machines, but human review needs pictures. The
-most useful first charts would be:
+The first visualization notebook now exists, but this area should keep growing.
+The current notebook already produces summary-level benchmark/profile charts.
+The next step is to rerun profiles with richer JSON outputs and use them for:
 
 - **ACPL distribution by Elo range** — benchmark distribution with the profiled
   player marked.

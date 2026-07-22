@@ -11,12 +11,11 @@ import argparse
 import sys
 import time
 from contextlib import nullcontext
-from pathlib import Path
 
 from .analyze import analyze_game, iter_games
 from .engine import open_analyzer
 from .maia import open_maia_analyzer
-from .profile import build_profile, benchmarking, benchmark_path_for_elo_range
+from .profile import RunMetadata, build_profile, benchmarking, benchmark_path_for_elo_range
 
 
 
@@ -58,6 +57,23 @@ def _add_maia_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--maia-timeout", type=float, default=120.0, help="seconds to wait for Maia to start")
     p.add_argument("--maia-device", default="cpu", help="Maia inference device, e.g. cpu, mps, or cuda")
     p.add_argument("--maia-use-amp", action="store_true", help="allow Maia automatic mixed precision")
+
+
+def _run_metadata_from_args(args, elo_range: list[int] | None = None) -> RunMetadata:
+    maia_elo = args.maia_elo
+    if maia_elo is None and elo_range is not None:
+        low, high = elo_range
+        maia_elo = (low + high) // 2
+
+    return RunMetadata(
+        source_file=args.pgn,
+        maia_model=args.maia_model,
+        maia_elo=maia_elo,
+        maia_device=args.maia_device,
+        maia_multipv=args.maia_multipv,
+        stockfish_depth=args.depth,
+        stockfish_threads=args.threads,
+    )
 
 
 def _open_maia_from_args(args, elo_range: list[int] | None = None):
@@ -144,17 +160,18 @@ def cmd_single_benchmark(args)->int:
                     break
                 
             inference_seconds = time.perf_counter() - start_time
-            output_path = benchmark_path_for_elo_range(args.elo_range,reports)
+            run_metadata = _run_metadata_from_args(args, args.elo_range)
             result = benchmarking(
                 args.elo_range,
                 reports,
+                run_metadata,
                 inference_seconds=inference_seconds,
-                output_path=output_path,
             )
             if result is None:
                 print(f"\n=== ELO Benchmark: {low}–{high} ===")
                 print("  skipped: no analysable player sides found")
                 return 0
+            output_path = benchmark_path_for_elo_range(args.elo_range,reports)
             
     print(f"\n=== ELO Benchmark: {low}–{high} ===")
     print(f"  games analysed      : {result['games_analyzed']}")
@@ -204,19 +221,19 @@ def cmd_general_benchmark(args)->int:
                         break
 
             inference_seconds = time.perf_counter() - start_time
-            output_path = benchmark_path_for_elo_range(elo_range,reports)
-           
+            run_metadata = _run_metadata_from_args(args, elo_range)
             result = benchmarking(
                 elo_range,
                 reports,
+                run_metadata,
                 inference_seconds=inference_seconds,
-                output_path=output_path,
             )
 
             if result is None:
                 print(f"\n=== ELO Benchmark: {low}–{high} ===")
                 print("  skipped: no analysable player sides found")
                 continue
+            output_path = benchmark_path_for_elo_range(elo_range,reports)
 
             total_time+=inference_seconds
                 
@@ -280,7 +297,7 @@ def cmd_profile(args) -> int:
     print(f"  avg top-move % : {prof.avg_match_pct:.1f}")
     print(f"  avg accuracy   : {prof.avg_accuracy:.1f}")
     print(f"  total blunders : {prof.total_blunders}")
-    print(f"\n  SUSPICION SCORE: {prof.suspicion:.0f}/100")
+    print(f"\n  SUSPICION SCORE: {prof.suspicion['general_score']:.0f}/100")
     print(f"Inference Time : {inference_seconds}")
     print("  reasons:")
     
@@ -331,21 +348,20 @@ def cmd_profile_all(args) -> int:
         inference_seconds = time.perf_counter() - start_time
         
         print(f"\n=== ELO Profile: {low}–{high} ===")
-        print(f"  samples analysed: {prof.games}")
-        print(f"\n=== Profile: {prof.elo_range} ===")
         print(f"  games analysed : {prof.games}")
+        print(f"  inference time : {inference_seconds}")
+        print(f"  confidence     : {prof.confidence:.1f}%")
         print(f"  avg ACPL       : {prof.avg_acpl:.1f}  (stdev {prof.acpl_stdev:.1f})")
         print(f"  avg top-move % : {prof.avg_match_pct:.1f}")
         print(f"  avg accuracy   : {prof.avg_accuracy:.1f}")
         print(f"  total blunders : {prof.total_blunders}")
-        print(f"\n  SUSPICION SCORE: {prof.suspicion:.0f}/100")
-        print(f"Inference Time : {inference_seconds}")
+        print(f"\n  SUSPICION SCORE: {prof.suspicion['general_score']:.0f}/100")
         print("  reasons:")
         
         for r in prof.reasons:
             print(f"    - {r}")
-            print("\n  NOTE: this is a statistical indicator, not proof. Always have a "
-          "human review the actual games before acting on an account.")
+        print("\n  NOTE: this is a statistical indicator, not proof. Always have a "
+              "human review the actual games before acting on an account.")
     
     return 0
     

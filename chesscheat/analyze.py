@@ -113,6 +113,7 @@ def analyze_game(
             if prediction is not None
             else False
         )
+        maia_san = prediction.best_san if prediction is not None else "?"
         
         
 
@@ -129,6 +130,7 @@ def analyze_game(
             win_before=win_before,
             win_after=win_after,
             accuracy=accuracy_from_win_drop(win_before, win_after),
+            maia_san=maia_san,
         ))
 
     report.white_summary = summarize(report.moves, white=True)
